@@ -36,19 +36,20 @@ model_names = sorted(name for name in models.__dict__
     and callable(models.__dict__[name]))
 
 parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
+# ======== folders
 parser.add_argument('data', metavar='DIR',
                     help='path to dataset')
+parser.add_argument('--checkpoint_dir', type=str)
+
+
+# ======== backbone architecture
 parser.add_argument('-a', '--arch', metavar='ARCH', default='resnet50',
                     choices=model_names,
                     help='model architecture: ' +
                         ' | '.join(model_names) +
                         ' (default: resnet50)')
-parser.add_argument('-j', '--workers', default=32, type=int, metavar='N',
-                    help='number of data loading workers (default: 32)')
-parser.add_argument('--epochs', default=200, type=int, metavar='N',
-                    help='number of total epochs to run')
-parser.add_argument('--start-epoch', default=0, type=int, metavar='N',
-                    help='manual epoch number (useful on restarts)')
+
+# ======== optimization
 parser.add_argument('-b', '--batch-size', default=256, type=int,
                     metavar='N',
                     help='mini-batch size (default: 256), this is the total '
@@ -63,10 +64,20 @@ parser.add_argument('--momentum', default=0.9, type=float, metavar='M',
 parser.add_argument('--wd', '--weight-decay', default=1e-4, type=float,
                     metavar='W', help='weight decay (default: 1e-4)',
                     dest='weight_decay')
+
+# ======== general training conf
+parser.add_argument('--epochs', default=200, type=int, metavar='N',
+                    help='number of total epochs to run')
+parser.add_argument('--start-epoch', default=0, type=int, metavar='N',
+                    help='manual epoch number (useful on restarts)')
 parser.add_argument('-p', '--print-freq', default=10, type=int,
                     metavar='N', help='print frequency (default: 10)')
 parser.add_argument('--resume', default='', type=str, metavar='PATH',
                     help='path to latest checkpoint (default: none)')
+
+# ======== distributed training
+parser.add_argument('-j', '--workers', default=32, type=int, metavar='N',
+                    help='number of data loading workers (default: 32)')
 parser.add_argument('--world-size', default=-1, type=int,
                     help='number of nodes for distributed training')
 parser.add_argument('--rank', default=-1, type=int,
@@ -245,31 +256,40 @@ def main_worker(gpu, ngpus_per_node, args):
     # Data loading code
     # traindir = os.path.join(args.data, 'train')
     traindir = args.data
-    normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                     std=[0.229, 0.224, 0.225])
-    if args.aug_plus:
-        # MoCo v2's aug: similar to SimCLR https://arxiv.org/abs/2002.05709
-        augmentation = [
-            transforms.RandomResizedCrop(224, scale=(0.2, 1.)),
-            transforms.RandomApply([
-                transforms.ColorJitter(0.4, 0.4, 0.4, 0.1)  # not strengthened
-            ], p=0.8),
-            transforms.RandomGrayscale(p=0.2),
-            transforms.RandomApply([moco.loader.GaussianBlur([.1, 2.])], p=0.5),
-            transforms.RandomHorizontalFlip(),
-            transforms.ToTensor(),
-            normalize
-        ]
-    else:
-        # MoCo v1's aug: the same as InstDisc https://arxiv.org/abs/1805.01978
-        augmentation = [
-            transforms.RandomResizedCrop(224, scale=(0.2, 1.)),
-            transforms.RandomGrayscale(p=0.2),
-            transforms.ColorJitter(0.4, 0.4, 0.4, 0.4),
-            transforms.RandomHorizontalFlip(),
-            transforms.ToTensor(),
-            normalize
-        ]
+
+    # ====== ImageNet normalization - not suitable for medical applications
+    # normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
+    #                                  std=[0.229, 0.224, 0.225])
+    # if args.aug_plus:
+    #     # MoCo v2's aug: similar to SimCLR https://arxiv.org/abs/2002.05709
+    #     augmentation = [
+    #         transforms.RandomResizedCrop(224, scale=(0.2, 1.)),
+    #         transforms.RandomApply([
+    #             transforms.ColorJitter(0.4, 0.4, 0.4, 0.1)  # not strengthened
+    #         ], p=0.8),
+    #         transforms.RandomGrayscale(p=0.2),
+    #         transforms.RandomApply([moco.loader.GaussianBlur([.1, 2.])], p=0.5),
+    #         transforms.RandomHorizontalFlip(),
+    #         transforms.ToTensor(),
+    #         normalize
+    #     ]
+    # else:
+    #     # MoCo v1's aug: the same as InstDisc https://arxiv.org/abs/1805.01978
+    #     augmentation = [
+    #         transforms.RandomResizedCrop(224, scale=(0.2, 1.)),
+    #         transforms.RandomGrayscale(p=0.2),
+    #         transforms.ColorJitter(0.4, 0.4, 0.4, 0.4),
+    #         transforms.RandomHorizontalFlip(),
+    #         transforms.ToTensor(),
+    #         normalize
+    #     ]
+
+    augmentation = [
+        transforms.Resize((316, 256)),
+        transforms.RandomHorizontalFlip(),
+        transforms.RandomRotation(degrees=10),
+        transforms.ToTensor(),
+    ]
 
     # ==== ImageNet dataset
     # train_dataset = datasets.ImageFolder(
@@ -298,29 +318,29 @@ def main_worker(gpu, ngpus_per_node, args):
         # train for one epoch
         train(train_loader, model, criterion, optimizer, epoch, args)
 
-        # ====== do not save checkpoint for now
-        # if not args.multiprocessing_distributed or (args.multiprocessing_distributed
-        #         and args.rank % ngpus_per_node == 0):
-        #     save_checkpoint({
-        #         'epoch': epoch + 1,
-        #         'arch': args.arch,
-        #         'state_dict': model.state_dict(),
-        #         'optimizer': optimizer.state_dict(),
-        #     }, is_best=False, filename='checkpoint_{:04d}.pth.tar'.format(epoch))
+        # save checkpoints
+        if not args.multiprocessing_distributed or (args.multiprocessing_distributed and args.rank % ngpus_per_node == 0):
+            assert args.checkpoint_dir is not None, 'checkpoint_dir should be specified'
+            print(f'Saving checkpoint with epoch: {epoch + 1}')
+
+            save_checkpoint({
+                'epoch': epoch + 1,
+                'arch': args.arch,
+                'state_dict': model.state_dict(),
+                'optimizer': optimizer.state_dict(),
+            }, is_best=False, filename=os.path.join(args.checkpoint_dir, 'checkpoint_{:04d}.pth.tar'.format(epoch + 1)))
 
 
 def train(train_loader, model, criterion, optimizer, epoch, args):
     batch_time = AverageMeter('Time', ':6.3f')
     data_time = AverageMeter('Data', ':6.3f')
     losses = AverageMeter('Loss', ':.4e')
-
-    # ==== do not calc accuracies for now
-    # top1 = AverageMeter('Acc@1', ':6.2f')
-    # top5 = AverageMeter('Acc@5', ':6.2f')
-    # progress = ProgressMeter(
-    #     len(train_loader),
-    #     [batch_time, data_time, losses, top1, top5],
-    #     prefix="Epoch: [{}]".format(epoch))
+    top1 = AverageMeter('Acc@1', ':6.2f')
+    top5 = AverageMeter('Acc@5', ':6.2f')
+    progress = ProgressMeter(
+        len(train_loader),
+        [batch_time, data_time, losses, top1, top5],
+        prefix="Epoch: [{}]".format(epoch))
 
     # switch to train mode
     model.train()
@@ -340,18 +360,17 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
         loss = criterion(output, target)
 
         loss_value = loss.item()
-        print(f'Loss: {loss_value}')
+        # print(f'Loss: {loss_value}')
         global tracker
-        if tracker is not None:
+        if tracker is not None and args.gpu == 0:
             tracker.track_metric('train_loss', loss_value)
 
-        # ===== no accuracy for now
         # acc1/acc5 are (K+1)-way contrast classifier accuracy
         # measure accuracy and record loss
-        # acc1, acc5 = accuracy(output, target, topk=(1, 5))
+        acc1, acc5 = accuracy(output, target, topk=(1, 5))
         losses.update(loss.item(), images[0].size(0))
-        # top1.update(acc1[0], images[0].size(0))
-        # top5.update(acc5[0], images[0].size(0))
+        top1.update(acc1[0], images[0].size(0))
+        top5.update(acc5[0], images[0].size(0))
 
         # compute gradient and do SGD step
         optimizer.zero_grad()
@@ -362,8 +381,8 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
         batch_time.update(time.time() - end)
         end = time.time()
 
-        # if i % args.print_freq == 0:
-        #     progress.display(i)
+        if i % args.print_freq == 0:
+            progress.display(i)
 
 
 def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
@@ -431,7 +450,7 @@ def accuracy(output, target, topk=(1,)):
         maxk = max(topk)
         batch_size = target.size(0)
 
-        _, pred = output.topk(maxk, 1, True, True)
+        _, pred = output.topk(k=maxk, dim=1, largest=True, sorted=True)  # get top k predictions
         pred = pred.t()
         correct = pred.eq(target.view(1, -1).expand_as(pred))
 
