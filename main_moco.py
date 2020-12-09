@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
+from comet_ml import Experiment, ExistingExperiment  # should be here: imported before pytorch
 import argparse
 import builtins
 import math
@@ -24,6 +25,10 @@ import torchvision.models as models
 
 import moco.loader
 import moco.builder
+
+import helper
+
+tracker = None  # for tracking experiments using comet (see helper package)
 
 
 model_names = sorted(name for name in models.__dict__
@@ -79,6 +84,8 @@ parser.add_argument('--multiprocessing-distributed', action='store_true',
                          'N processes per node, which has N GPUs. This is the '
                          'fastest way to use PyTorch for either single node or '
                          'multi node data parallel training')
+parser.add_argument('--comet', action='store_true')
+
 
 # moco specific configs:
 parser.add_argument('--moco-dim', default=128, type=int,
@@ -97,6 +104,17 @@ parser.add_argument('--aug-plus', action='store_true',
                     help='use moco v2 data augmentation')
 parser.add_argument('--cos', action='store_true',
                     help='use cosine lr schedule')
+
+
+def set_gpu_devices():
+    os.environ['CUDA_DEVICE_ORDER'] = 'PCI_BUS_ID'
+    os.environ['CUDA_VISIBLE_DEVICES'] = '4,5,6,7'
+    print(f'Setting GPU devices is done. CUDA_VISIBLE_DEVICES: {os.environ["CUDA_VISIBLE_DEVICES"]}')
+
+
+def set_tracker():
+    global tracker
+    tracker = helper.init_comet()
 
 
 def main():
@@ -119,9 +137,14 @@ def main():
     if args.dist_url == "env://" and args.world_size == -1:
         args.world_size = int(os.environ["WORLD_SIZE"])
 
-    args.distributed = args.world_size > 1 or args.multiprocessing_distributed
+    if args.comet:
+        set_tracker()
 
+    set_gpu_devices()
+
+    args.distributed = args.world_size > 1 or args.multiprocessing_distributed  # for us it is always True
     ngpus_per_node = torch.cuda.device_count()
+
     if args.multiprocessing_distributed:
         # Since we have ngpus_per_node processes per node, the total world_size
         # needs to be adjusted accordingly
@@ -129,13 +152,14 @@ def main():
         # Use torch.multiprocessing.spawn to launch distributed processes: the
         # main_worker process function
         mp.spawn(main_worker, nprocs=ngpus_per_node, args=(ngpus_per_node, args))
+
     else:
         # Simply call main_worker function
         main_worker(args.gpu, ngpus_per_node, args)
 
 
 def main_worker(gpu, ngpus_per_node, args):
-    args.gpu = gpu
+    args.gpu = gpu  # every GPU receives a different number
 
     # suppress printing if not master
     if args.multiprocessing_distributed and args.gpu != 0:
@@ -143,8 +167,8 @@ def main_worker(gpu, ngpus_per_node, args):
             pass
         builtins.print = print_pass
 
-    if args.gpu is not None:
-        print("Use GPU: {} for training".format(args.gpu))
+    # if args.gpu is not None:
+    #     print("Use GPU: {} for training".format(args.gpu))  # this is not a useful print because only GPU 0 prints it, other GPUs are muted
 
     if args.distributed:
         if args.dist_url == "env://" and args.rank == -1:
@@ -160,7 +184,7 @@ def main_worker(gpu, ngpus_per_node, args):
     model = moco.builder.MoCo(
         models.__dict__[args.arch],
         args.moco_dim, args.moco_k, args.moco_m, args.moco_t, args.mlp)
-    print(model)
+    # print(model)
 
     if args.distributed:
         # For multiprocessing distributed, DistributedDataParallel constructor
@@ -175,6 +199,7 @@ def main_worker(gpu, ngpus_per_node, args):
             args.batch_size = int(args.batch_size / ngpus_per_node)
             args.workers = int((args.workers + ngpus_per_node - 1) / ngpus_per_node)
             model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
+
         else:
             model.cuda()
             # DistributedDataParallel will divide and allocate batch_size to all
@@ -215,10 +240,11 @@ def main_worker(gpu, ngpus_per_node, args):
         else:
             print("=> no checkpoint found at '{}'".format(args.resume))
 
-    cudnn.benchmark = True
+    # cudnn.benchmark = True  # it raises an error with multiple GPUs (tried on Medusa)
 
     # Data loading code
-    traindir = os.path.join(args.data, 'train')
+    # traindir = os.path.join(args.data, 'train')
+    traindir = args.data
     normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                      std=[0.229, 0.224, 0.225])
     if args.aug_plus:
@@ -245,9 +271,15 @@ def main_worker(gpu, ngpus_per_node, args):
             normalize
         ]
 
-    train_dataset = datasets.ImageFolder(
-        traindir,
-        moco.loader.TwoCropsTransform(transforms.Compose(augmentation)))
+    # ==== ImageNet dataset
+    # train_dataset = datasets.ImageFolder(
+    #     traindir,
+    #     moco.loader.TwoCropsTransform(transforms.Compose(augmentation)))
+
+    # ==== our dataset
+    train_dataset = moco.loader.MammoDataset(data_folder=traindir,
+                                             transformations=moco.loader.TwoCropsTransform(transforms.Compose(augmentation)))
+    print(f'Initialized dataset of len: {len(train_dataset)}')
 
     if args.distributed:
         train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
@@ -266,32 +298,36 @@ def main_worker(gpu, ngpus_per_node, args):
         # train for one epoch
         train(train_loader, model, criterion, optimizer, epoch, args)
 
-        if not args.multiprocessing_distributed or (args.multiprocessing_distributed
-                and args.rank % ngpus_per_node == 0):
-            save_checkpoint({
-                'epoch': epoch + 1,
-                'arch': args.arch,
-                'state_dict': model.state_dict(),
-                'optimizer': optimizer.state_dict(),
-            }, is_best=False, filename='checkpoint_{:04d}.pth.tar'.format(epoch))
+        # ====== do not save checkpoint for now
+        # if not args.multiprocessing_distributed or (args.multiprocessing_distributed
+        #         and args.rank % ngpus_per_node == 0):
+        #     save_checkpoint({
+        #         'epoch': epoch + 1,
+        #         'arch': args.arch,
+        #         'state_dict': model.state_dict(),
+        #         'optimizer': optimizer.state_dict(),
+        #     }, is_best=False, filename='checkpoint_{:04d}.pth.tar'.format(epoch))
 
 
 def train(train_loader, model, criterion, optimizer, epoch, args):
     batch_time = AverageMeter('Time', ':6.3f')
     data_time = AverageMeter('Data', ':6.3f')
     losses = AverageMeter('Loss', ':.4e')
-    top1 = AverageMeter('Acc@1', ':6.2f')
-    top5 = AverageMeter('Acc@5', ':6.2f')
-    progress = ProgressMeter(
-        len(train_loader),
-        [batch_time, data_time, losses, top1, top5],
-        prefix="Epoch: [{}]".format(epoch))
+
+    # ==== do not calc accuracies for now
+    # top1 = AverageMeter('Acc@1', ':6.2f')
+    # top5 = AverageMeter('Acc@5', ':6.2f')
+    # progress = ProgressMeter(
+    #     len(train_loader),
+    #     [batch_time, data_time, losses, top1, top5],
+    #     prefix="Epoch: [{}]".format(epoch))
 
     # switch to train mode
     model.train()
 
     end = time.time()
-    for i, (images, _) in enumerate(train_loader):
+    # for i, (images, _) in enumerate(train_loader):
+    for i, images in enumerate(train_loader):
         # measure data loading time
         data_time.update(time.time() - end)
 
@@ -303,12 +339,19 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
         output, target = model(im_q=images[0], im_k=images[1])
         loss = criterion(output, target)
 
+        loss_value = loss.item()
+        print(f'Loss: {loss_value}')
+        global tracker
+        if tracker is not None:
+            tracker.track_metric('train_loss', loss_value)
+
+        # ===== no accuracy for now
         # acc1/acc5 are (K+1)-way contrast classifier accuracy
         # measure accuracy and record loss
-        acc1, acc5 = accuracy(output, target, topk=(1, 5))
+        # acc1, acc5 = accuracy(output, target, topk=(1, 5))
         losses.update(loss.item(), images[0].size(0))
-        top1.update(acc1[0], images[0].size(0))
-        top5.update(acc5[0], images[0].size(0))
+        # top1.update(acc1[0], images[0].size(0))
+        # top5.update(acc5[0], images[0].size(0))
 
         # compute gradient and do SGD step
         optimizer.zero_grad()
@@ -319,8 +362,8 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
         batch_time.update(time.time() - end)
         end = time.time()
 
-        if i % args.print_freq == 0:
-            progress.display(i)
+        # if i % args.print_freq == 0:
+        #     progress.display(i)
 
 
 def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):

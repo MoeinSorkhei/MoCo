@@ -60,7 +60,8 @@ class MoCo(nn.Module):
         assert self.K % batch_size == 0  # for simplicity
 
         # replace the keys at ptr (dequeue and enqueue)
-        self.queue[:, ptr:ptr + batch_size] = keys.T
+        # self.queue[:, ptr:ptr + batch_size] = keys.T
+        self.queue[:, ptr:ptr + batch_size] = torch.t(keys)  # it seems a cuda tensor does not have attribute T, so torch.t() is used instead
         ptr = (ptr + batch_size) % self.K  # move pointer
 
         self.queue_ptr[0] = ptr
