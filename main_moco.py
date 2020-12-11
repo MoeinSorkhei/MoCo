@@ -117,12 +117,6 @@ parser.add_argument('--cos', action='store_true',
                     help='use cosine lr schedule')
 
 
-def set_gpu_devices():
-    os.environ['CUDA_DEVICE_ORDER'] = 'PCI_BUS_ID'
-    os.environ['CUDA_VISIBLE_DEVICES'] = '4,5,6,7'
-    print(f'Setting GPU devices is done. CUDA_VISIBLE_DEVICES: {os.environ["CUDA_VISIBLE_DEVICES"]}')
-
-
 def set_tracker():
     global tracker
     tracker = helper.init_comet()
@@ -151,7 +145,7 @@ def main():
     if args.comet:
         set_tracker()
 
-    set_gpu_devices()
+    helper.set_gpu_devices(devices='4,5,6,7')
 
     args.distributed = args.world_size > 1 or args.multiprocessing_distributed  # for us it is always True
     ngpus_per_node = torch.cuda.device_count()

@@ -2,6 +2,22 @@ import os
 import glob
 import logging
 import sys
+import torch
+
+
+def set_gpu_devices(devices):
+    os.environ['CUDA_DEVICE_ORDER'] = 'PCI_BUS_ID'
+    os.environ['CUDA_VISIBLE_DEVICES'] = devices
+    print(f'Setting GPU devices is done. '
+          f'CUDA_VISIBLE_DEVICES: {os.environ["CUDA_VISIBLE_DEVICES"]}, '
+          f'current_device(s): {torch.cuda.current_device()} '
+          f'count: {torch.cuda.device_count()}')
+
+
+def show_num_params(model):
+    total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f'Model total params: {total_params:,} - trainable params: {trainable_params:,}')
 
 
 def files_with_suffix(directory, suffix, pure=False):
