@@ -3,6 +3,9 @@ import glob
 import logging
 import sys
 import torch
+import matplotlib.pyplot as plt
+
+from .file_io import *
 
 
 def set_gpu_devices(devices):
@@ -10,8 +13,7 @@ def set_gpu_devices(devices):
     os.environ['CUDA_VISIBLE_DEVICES'] = devices
     print(f'Setting GPU devices is done. '
           f'CUDA_VISIBLE_DEVICES: {os.environ["CUDA_VISIBLE_DEVICES"]}, '
-          f'current_device(s): {torch.cuda.current_device()} '
-          f'count: {torch.cuda.device_count()}')
+          f'device count: {torch.cuda.device_count()}')
 
 
 def show_num_params(model):
@@ -47,3 +49,34 @@ def waited_print(string):
     print(string)
     print('====== Waiting for input')
     input()
+
+
+def plot_log_file(file):
+    lines = read_file_to_list(file)
+    lines = [line for line in lines if line.startswith('Epoch')]  # remove initial lines
+
+    acc_at1_list, acc_at1_avg_list = [], []
+    loss_list, loss_avs_list = [], []
+    for line in lines:
+        the_list = line.split('\t')
+        loss_part = the_list[3]
+        loss, loss_avg = float(loss_part.split(' ')[1]), float(loss_part.split(' ')[2][1:-1])
+
+        acc_at1_part = the_list[4]
+        acc_at5_part = the_list[5]
+
+        acc_at_1, acc_at1_avg = float(acc_at1_part[6:12].strip()), float(acc_at1_part[14:20].strip())
+        acc_at_5, acc_at5_avg = float(acc_at5_part[6:12].strip()), float(acc_at5_part[14:20].strip())
+
+        loss_list.append(loss)
+        acc_at1_list.append(acc_at_1)
+
+        # print(f'{loss},{loss_avg}')
+        # print(f'{acc_at_1},{acc_at1_avg}')
+        # print(f'{acc_at_5},{acc_at5_avg}')
+
+    # todo: complete drawing matplotlib
+    plt.plot(loss_list)
+    plt.show()
+
+

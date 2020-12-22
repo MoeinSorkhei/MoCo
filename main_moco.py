@@ -39,6 +39,9 @@ parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
 # ======== folders
 parser.add_argument('data', metavar='DIR',
                     help='path to dataset')
+
+parser.add_argument('--image_names_file', type=str)
+parser.add_argument('--imread_mode', type=int)
 parser.add_argument('--checkpoint_dir', type=str)
 
 
@@ -95,6 +98,8 @@ parser.add_argument('--multiprocessing-distributed', action='store_true',
                          'N processes per node, which has N GPUs. This is the '
                          'fastest way to use PyTorch for either single node or '
                          'multi node data parallel training')
+
+parser.add_argument('--devices', type=str)  # comma-separated, no space
 parser.add_argument('--comet', action='store_true')
 
 
@@ -145,7 +150,7 @@ def main():
     if args.comet:
         set_tracker()
 
-    helper.set_gpu_devices(devices='4,5,6,7')
+    helper.set_gpu_devices(devices=args.devices)
 
     args.distributed = args.world_size > 1 or args.multiprocessing_distributed  # for us it is always True
     ngpus_per_node = torch.cuda.device_count()
@@ -172,9 +177,6 @@ def main_worker(gpu, ngpus_per_node, args):
             pass
         builtins.print = print_pass
 
-    # if args.gpu is not None:
-    #     print("Use GPU: {} for training".format(args.gpu))  # this is not a useful print because only GPU 0 prints it, other GPUs are muted
-
     if args.distributed:
         if args.dist_url == "env://" and args.rank == -1:
             args.rank = int(os.environ["RANK"])
@@ -189,7 +191,6 @@ def main_worker(gpu, ngpus_per_node, args):
     model = moco.builder.MoCo(
         models.__dict__[args.arch],
         args.moco_dim, args.moco_k, args.moco_m, args.moco_t, args.mlp)
-    # print(model)
 
     if args.distributed:
         # For multiprocessing distributed, DistributedDataParallel constructor
@@ -248,52 +249,22 @@ def main_worker(gpu, ngpus_per_node, args):
     # cudnn.benchmark = True  # it raises an error with multiple GPUs (tried on Medusa)
 
     # Data loading code
-    # traindir = os.path.join(args.data, 'train')
     traindir = args.data
-
-    # ====== ImageNet normalization - not suitable for medical applications
-    # normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
-    #                                  std=[0.229, 0.224, 0.225])
-    # if args.aug_plus:
-    #     # MoCo v2's aug: similar to SimCLR https://arxiv.org/abs/2002.05709
-    #     augmentation = [
-    #         transforms.RandomResizedCrop(224, scale=(0.2, 1.)),
-    #         transforms.RandomApply([
-    #             transforms.ColorJitter(0.4, 0.4, 0.4, 0.1)  # not strengthened
-    #         ], p=0.8),
-    #         transforms.RandomGrayscale(p=0.2),
-    #         transforms.RandomApply([moco.loader.GaussianBlur([.1, 2.])], p=0.5),
-    #         transforms.RandomHorizontalFlip(),
-    #         transforms.ToTensor(),
-    #         normalize
-    #     ]
-    # else:
-    #     # MoCo v1's aug: the same as InstDisc https://arxiv.org/abs/1805.01978
-    #     augmentation = [
-    #         transforms.RandomResizedCrop(224, scale=(0.2, 1.)),
-    #         transforms.RandomGrayscale(p=0.2),
-    #         transforms.ColorJitter(0.4, 0.4, 0.4, 0.4),
-    #         transforms.RandomHorizontalFlip(),
-    #         transforms.ToTensor(),
-    #         normalize
-    #     ]
+    train_image_names = helper.read_file_to_list(args.image_names_file)
 
     augmentation = [
-        transforms.Resize((316, 256)),
+        # transforms.Resize((316, 256)),  # use the actual size that the image has
         transforms.RandomHorizontalFlip(),
         transforms.RandomRotation(degrees=10),
         transforms.ToTensor(),
     ]
 
-    # ==== ImageNet dataset
-    # train_dataset = datasets.ImageFolder(
-    #     traindir,
-    #     moco.loader.TwoCropsTransform(transforms.Compose(augmentation)))
-
     # ==== our dataset
-    train_dataset = moco.loader.MammoDataset(data_folder=traindir,
-                                             transformations=moco.loader.TwoCropsTransform(transforms.Compose(augmentation)))
-    print(f'Initialized dataset of len: {len(train_dataset)}')
+    print(f'Dataset augmentations: {augmentation}')
+    train_dataset = moco.loader.MammoDataset(image_names=train_image_names,
+                                             data_folder=traindir,
+                                             transformations=moco.loader.TwoCropsTransform(transforms.Compose(augmentation)),
+                                             imread_mode=args.imread_mode)
 
     if args.distributed:
         train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
@@ -380,6 +351,7 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
 
 
 def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
+    helper.make_dir_if_not_exists(os.path.split(filename)[0])  # make checkpoint dir if not available
     torch.save(state, filename)
     if is_best:
         shutil.copyfile(filename, 'model_best.pth.tar')
