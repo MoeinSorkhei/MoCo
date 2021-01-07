@@ -51,7 +51,7 @@ def waited_print(string):
     input()
 
 
-def plot_log_file(file, metrics, title):
+def parse_log_file(file, mode='general'):
     lines = read_file_to_list(file)
     lines = [line for line in lines if line.startswith('Epoch')]  # remove initial lines
 
@@ -59,7 +59,19 @@ def plot_log_file(file, metrics, title):
     acc_at5_list, acc_at5_avg_list = [], []
     loss_list, loss_avg_list = [], []
 
-    for line in lines:
+    if mode == 'epoch_select':
+        lines_to_consider = []
+        for epoch in range(200):
+            epoch_lines = [line for line in lines if line.startswith(f'Epoch: [{epoch}]')]
+            # print(f'Epoch {epoch} lines: {len(epoch_lines)}')
+            if len(epoch_lines) > 0:  # if there are any lines in the log file with that epoch
+                lines_to_consider.append(epoch_lines[-1])  # last line for each epoch before saving checkpoint
+    else:
+        lines_to_consider = lines  # general mode, consider all lines
+
+    # waited_print('')
+
+    for line in lines_to_consider:
         the_list = line.split('\t')
         loss_part = the_list[3]
         loss, loss_avg = float(loss_part.split(' ')[1]), float(loss_part.split(' ')[2][1:-1])
@@ -78,20 +90,41 @@ def plot_log_file(file, metrics, title):
         acc_at5_list.append(acc_at_5)
         acc_at5_avg_list.append(acc_at5_avg)
 
-    plt.title(title)
-    if 'loss' in metrics:
-        plt.plot(loss_list, label='loss')
-        plt.plot(loss_avg_list, label='loss_avg')
+    return {
+        'acc_at1_list': acc_at1_list,
+        'acc_at1_avg_list': acc_at1_avg_list,
+        'acc_at5_list': acc_at5_list,
+        'acc_at5_avg_list': acc_at5_avg_list,
+        'loss_list': loss_list,
+        'loss_avg_list': loss_avg_list
+    }
 
-    if 'acc_at1' in metrics:
-        plt.plot(acc_at1_list, label='acc_at1')
-        plt.plot(acc_at1_avg_list, label='acc_at1_avg')
 
-    if 'acc_at5' in metrics:
-        plt.plot(acc_at5_list, label='acc_at5')
-        plt.plot(acc_at5_avg_list, label='acc_at5_avg')
+def visualize_log_file(file, metrics, title, parse_mode, vis_mode):
+    dicts = parse_log_file(file, parse_mode)
 
-    plt.legend()
-    plt.show()
+    if vis_mode == 'do_prints':
+        acc_at1_avg_list = dicts['acc_at1_avg_list']
+        max_acc_at_1_avg = max(acc_at1_avg_list)
+        inds = [i for i, j in enumerate(acc_at1_avg_list) if j == max_acc_at_1_avg]
+        print(f'max_acc_at_1_avg: {max_acc_at_1_avg}, inds: {inds}')
+
+    else:
+        plt.title(title)
+        if 'loss' in metrics:
+            plt.plot(dicts['loss_list'], label='loss')
+            plt.plot(dicts['loss_avg_list'], label='loss_avg')
+
+        if 'acc_at1' in metrics:
+            plt.plot(dicts['acc_at1_list'], label='acc_at1')
+            plt.plot(dicts['acc_at1_avg_list'], label='acc_at1_avg')
+
+        if 'acc_at5' in metrics:
+            plt.plot(dicts['acc_at5_list'], label='acc_at5')
+            plt.plot(dicts['acc_at5_avg_list'], label='acc_at5_avg')
+
+        plt.legend()
+        plt.grid()
+        plt.show()
 
 

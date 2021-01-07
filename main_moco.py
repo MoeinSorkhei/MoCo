@@ -286,14 +286,14 @@ def main_worker(gpu, ngpus_per_node, args):
         # save checkpoints
         if not args.multiprocessing_distributed or (args.multiprocessing_distributed and args.rank % ngpus_per_node == 0):
             assert args.checkpoint_dir is not None, 'checkpoint_dir should be specified'
-            print(f'Saving checkpoint with epoch: {epoch + 1}')
+            print(f'Saving checkpoint with epoch: {epoch}')
 
             save_checkpoint({
                 'epoch': epoch + 1,
                 'arch': args.arch,
                 'state_dict': model.state_dict(),
                 'optimizer': optimizer.state_dict(),
-            }, is_best=False, filename=os.path.join(args.checkpoint_dir, 'checkpoint_{:04d}.pth.tar'.format(epoch + 1)))
+            }, is_best=False, filename=os.path.join(args.checkpoint_dir, 'checkpoint_{:04d}.pth.tar'.format(epoch)))
 
 
 def train(train_loader, model, criterion, optimizer, epoch, args):
@@ -408,6 +408,7 @@ def adjust_learning_rate(optimizer, epoch, args):
             lr *= 0.1 if epoch >= milestone else 1.
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
+    print(f'Learning rate is adjusted to: {lr}')
 
 
 def accuracy(output, target, topk=(1,)):
